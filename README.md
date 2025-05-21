@@ -10,7 +10,7 @@
 
 ## 使用方法
 1.  **下载可执行文件**：
-    * 前往本项目的 [GitHub Releases 页面](https://github.com/Kobeelbows/Bili-Series-Downloader/releases)，下载zip文件并解压
+    * 前往本项目的release下载
   ****准备 FFmpeg** **：
     * **选项 A ：添加到系统 PATH**
         * 访问 [FFmpeg 官方网站](https://ffmpeg.org/download.html) 下载。

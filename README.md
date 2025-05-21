@@ -12,10 +12,7 @@
 1.  **下载可执行文件**：
     * 前往本项目的release下载
   ****准备 FFmpeg** **：
-    * **选项 A ：添加到系统 PATH**
-        * 访问 [FFmpeg 官方网站](https://ffmpeg.org/download.html) 下载。
-        * 解压 FFmpeg，并将其 `bin` 目录添加到系统的 **PATH 环境变量**中。
-    * **选项 B：放置在同目录下**
+    * 放置在同目录下（release里已有，别删）**
         * 将下载的 `ffmpeg.exe` 和 `ffprobe.exe` 文件放置到与你下载的本程序 `.exe` **相同的文件夹**内。
 
 ## 引用仓库

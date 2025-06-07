@@ -11,8 +11,8 @@
 ## 使用方法
  下载release --> 准备一个b站链接 --> 然后点击 **获取链接** --> **选择输出文件夹** --> **选择下载格式**
     ![image](https://github.com/user-attachments/assets/26f5fb5a-22c9-4f63-8d0f-c41ba354cf98)
-   
-
+## 错误修改/功能补全
+    联系邮箱myafsebastian@hotmail.com
 
 ## 引用仓库
     * **[yt-dlp](https://github.com/yt-dlp/yt-dlp)**：一个功能强大的命令行视频下载工具，是本程序实现下载功能的核心。感谢 `yt-dlp` 项目及其贡献者。

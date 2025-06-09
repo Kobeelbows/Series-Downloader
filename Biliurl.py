@@ -121,6 +121,16 @@ class BilibiliCrawler:
         self.clear_button.pack(side=tk.LEFT, padx=5)
         self.folder_button = ttk.Button(action_frame_row1, text="选择下载目录", command=self.choose_folder)
         self.folder_button.pack(side=tk.LEFT, padx=5)
+        
+        self.retry_button = ttk.Button(action_frame_row1, text="重试失败任务", command=self.retry_failed_downloads)
+        self.retry_button.pack(side=tk.LEFT, padx=5)
+        self.retry_button.config(state=tk.DISABLED)
+
+        self.check_duplicates_button = ttk.Button(action_frame_row1, text="检查重复文件", command=self.check_duplicate_files)
+        self.check_duplicates_button.pack(side=tk.LEFT, padx=5)
+
+        self.check_count_button = ttk.Button(action_frame_row1, text="检查文件数量", command=self.check_file_count)
+        self.check_count_button.pack(side=tk.LEFT, padx=5)
 
         action_frame_row2 = ttk.Frame(action_frame_container)
         action_frame_row2.pack(fill=tk.X, pady=(5,0))
@@ -169,6 +179,8 @@ class BilibiliCrawler:
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Referer': 'https://www.bilibili.com'
         }
+
+        self.failed_downloads = []
 
     def _on_mousewheel(self, event):
         if event.num == 4: 
@@ -287,6 +299,14 @@ class BilibiliCrawler:
                         metadata_title_raw = preferred_song_title if preferred_song_title else bilibili_raw_title
 
                         author_name = v_data.get('owner', {}).get('name', '未知作者')
+                        
+                        # 获取BV号作为唯一标识符
+                        bvid = v_data.get('bvid', '')
+                        
+                        # 在文件名中添加BV号作为唯一标识符
+                        audio_filename_base = f"{audio_filename_base}_[{bvid}]"
+                        video_filename_base = f"{video_filename_base}_[{bvid}]"
+                        
                         videos.append({
                             'display_title': self.sanitize_filename(display_title),
                             'audio_filename_base': self.sanitize_filename(audio_filename_base),
@@ -294,6 +314,7 @@ class BilibiliCrawler:
                             'metadata_title_raw': metadata_title_raw,
                             'url': f"https://www.bilibili.com/video/{v_data.get('bvid','')}?p={v_data.get('page',{}).get('page',1)}" if v_data.get('bvid') else '',
                             'author': author_name,
+                            'bvid': bvid,  # 保存BV号以便后续使用
                             'tk_var': tk.BooleanVar(value=True) 
                         })
                     else:
@@ -460,6 +481,11 @@ class BilibiliCrawler:
                         audio_filename_base = preferred_song_title if preferred_song_title else part_raw_title
                         video_filename_base = part_raw_title
                         metadata_title_raw = preferred_song_title if preferred_song_title else part_raw_title
+                        
+                        # 在文件名中添加BV号和P数作为唯一标识符
+                        audio_filename_base = f"{audio_filename_base}_[{bvid}_p{page_num}]"
+                        video_filename_base = f"{video_filename_base}_[{bvid}_p{page_num}]"
+                        
                         crawled_videos_result.append({
                             'display_title': self.sanitize_filename(display_title),
                             'audio_filename_base': self.sanitize_filename(audio_filename_base),
@@ -467,6 +493,7 @@ class BilibiliCrawler:
                             'metadata_title_raw': metadata_title_raw,
                             'url': f"https://www.bilibili.com/video/{bvid}?p={page_num}",
                             'author': author_name,
+                            'bvid': bvid,  # 保存BV号以便后续使用
                             'tk_var': tk.BooleanVar(value=True)
                         })
                 else: 
@@ -475,6 +502,11 @@ class BilibiliCrawler:
                     audio_filename_base = preferred_song_title if preferred_song_title else video_title_overall
                     video_filename_base = video_title_overall
                     metadata_title_raw = preferred_song_title if preferred_song_title else video_title_overall
+                    
+                    # 在文件名中添加BV号作为唯一标识符
+                    audio_filename_base = f"{audio_filename_base}_[{bvid}]"
+                    video_filename_base = f"{video_filename_base}_[{bvid}]"
+                    
                     crawled_videos_result.append({
                         'display_title': self.sanitize_filename(display_title),
                         'audio_filename_base': self.sanitize_filename(audio_filename_base),
@@ -482,6 +514,7 @@ class BilibiliCrawler:
                         'metadata_title_raw': metadata_title_raw,
                         'url': f"https://www.bilibili.com/video/{bvid}",
                         'author': author_name,
+                        'bvid': bvid,  # 保存BV号以便后续使用
                         'tk_var': tk.BooleanVar(value=True)
                     })
 
@@ -693,6 +726,7 @@ class BilibiliCrawler:
                         error_message_display = f"下载时发生未知错误: {error_message}"
 
                     failed_downloads_log.append(f"{video_info['display_title']} (URL: {video_info['url']}) - Error: {error_message_display}")
+                    self.failed_downloads.append(video_info)
                     self._update_gui_safe(self.status_var.set, f"失败 ({idx+1}/{total_videos_to_download}): {video_info['display_title'][:30]}...")
                     self._update_gui_safe(self._add_log_message, f"下载失败: {video_info['display_title']} - {error_message_display}")
 
@@ -712,6 +746,8 @@ class BilibiliCrawler:
             self._update_gui_safe(messagebox.showinfo, "下载完成", final_message)
             self._update_gui_safe(self.status_var.set, f"下载完成. 成功: {download_count}, 失败: {len(failed_downloads_log)}")
             self._update_gui_safe(self._add_log_message, f"总任务完成. 成功: {download_count}, 失败: {len(failed_downloads_log)}")
+
+            self._update_gui_safe(self.retry_button.config, state=tk.NORMAL if self.failed_downloads else tk.DISABLED)
         except Exception as e:
             self._update_gui_safe(messagebox.showerror, "下载线程错误", f"下载过程中发生严重错误: {e}")
             self._update_gui_safe(self.status_var.set, f"下载线程错误: {e}")
@@ -817,6 +853,8 @@ class BilibiliCrawler:
         self.log_text_area.delete(1.0, tk.END) 
         self.log_text_area.config(state=tk.DISABLED)
         self._add_log_message("列表和日志已清除。")
+        self.failed_downloads = []
+        self.retry_button.config(state=tk.DISABLED)
 
 
     def toggle_all_videos_selection(self):
@@ -833,6 +871,270 @@ class BilibiliCrawler:
             self._add_log_message("已全选所有视频。")
         else:
             self._add_log_message("已取消全选所有视频。")
+
+    def retry_failed_downloads(self):
+        """重新下载失败的视频"""
+        if not self.failed_downloads:
+            messagebox.showinfo("提示", "没有需要重试的失败任务。")
+            return
+
+        # 将失败的视频添加到下载列表
+        for video_info in self.failed_downloads:
+            video_info['tk_var'].set(True)  # 选中失败的视频
+            
+        # 取消选中其他视频
+        for video_info in self.video_links_data:
+            if video_info not in self.failed_downloads:
+                video_info['tk_var'].set(False)
+
+        # 开始下载
+        self.start_download_videos()
+
+    def check_duplicate_files(self):
+        """检查下载目录中是否已存在勾选的视频/音频文件"""
+        if not self.video_links_data:
+            messagebox.showinfo("提示", "没有视频列表可供检查。")
+            return
+            
+        if not self.download_folder or not os.path.isdir(self.download_folder):
+            messagebox.showwarning("选择目录", "请先选择一个有效的下载目录。")
+            self.choose_folder()
+            if not self.download_folder or not os.path.isdir(self.download_folder):
+                return
+                
+        # 获取下载目录中所有文件
+        existing_files = os.listdir(self.download_folder)
+        
+        # 获取当前下载模式
+        selected_mode_key = self.download_mode_var.get()
+        actual_mode = self.download_mode_options.get(selected_mode_key, "merge")
+        
+        # 计数器
+        unchecked_count = 0
+        checked_count = 0
+        
+        # 检查每个勾选的视频
+        for video_info in self.video_links_data:
+            if not video_info['tk_var'].get():
+                continue
+                
+            checked_count += 1
+            
+            # 根据下载模式选择文件名基础
+            if actual_mode == "audio_only":
+                filename_base = video_info.get('audio_filename_base', '')
+                possible_extensions = ['.m4a', '.mp3', '.aac', '.wav', '.opus']
+            elif actual_mode == "video_only":
+                filename_base = video_info.get('video_filename_base', '')
+                possible_extensions = ['.mp4', '.mkv', '.webm']
+            else:  # merge mode
+                filename_base = video_info.get('video_filename_base', '')
+                possible_extensions = ['.mp4', '.mkv', '.webm']
+            
+            # 检查是否存在对应文件
+            file_exists = False
+            for ext in possible_extensions:
+                potential_filename = f"{filename_base}{ext}"
+                if potential_filename in existing_files:
+                    file_exists = True
+                    break
+            
+            # 如果文件已存在，取消勾选
+            if file_exists:
+                video_info['tk_var'].set(False)
+                unchecked_count += 1
+        
+        # 显示结果
+        if unchecked_count > 0:
+            messagebox.showinfo("检查完成", f"检查了 {checked_count} 个勾选的视频，发现并取消勾选了 {unchecked_count} 个已存在的文件。")
+            self._add_log_message(f"检查重复: 取消勾选了 {unchecked_count} 个已存在的文件。")
+        else:
+            messagebox.showinfo("检查完成", f"检查了 {checked_count} 个勾选的视频，没有发现重复文件。")
+            self._add_log_message("检查重复: 没有发现重复文件。")
+
+    def check_file_count(self):
+        """检查下载文件数量与记录数量是否匹配"""
+        if not self.download_folder or not os.path.isdir(self.download_folder):
+            messagebox.showwarning("选择目录", "请先选择一个有效的下载目录。")
+            self.choose_folder()
+            if not self.download_folder or not os.path.isdir(self.download_folder):
+                return
+                
+        # 获取下载目录中所有文件
+        try:
+            all_files = os.listdir(self.download_folder)
+            # 过滤掉非媒体文件
+            media_extensions = ['.mp4', '.mkv', '.webm', '.m4a', '.mp3', '.aac', '.wav', '.opus']
+            media_files = [f for f in all_files if any(f.lower().endswith(ext) for ext in media_extensions)]
+            
+            # 检查是否有部分下载的临时文件
+            temp_files = [f for f in all_files if f.endswith('.part') or f.endswith('.temp') or f.endswith('.tmp')]
+            
+            # 查找可能的重复文件（基于文件名前缀）
+            filename_prefixes = {}
+            potential_duplicates = []
+            
+            for file in media_files:
+                # 去除扩展名的文件名
+                name_without_ext = os.path.splitext(file)[0]
+                if name_without_ext in filename_prefixes:
+                    potential_duplicates.append((name_without_ext, filename_prefixes[name_without_ext], file))
+                else:
+                    filename_prefixes[name_without_ext] = file
+            
+            # 构建分析报告
+            report = f"文件夹分析报告:\n\n"
+            report += f"1. 文件夹路径: {self.download_folder}\n"
+            report += f"2. 文件夹中的总文件数: {len(all_files)}\n"
+            report += f"3. 媒体文件数量: {len(media_files)}\n"
+            report += f"4. 临时/部分下载文件数: {len(temp_files)}\n"
+            
+            if potential_duplicates:
+                report += f"\n5. 发现 {len(potential_duplicates)} 个可能的重复文件名:\n"
+                for i, (prefix, file1, file2) in enumerate(potential_duplicates[:10], 1):
+                    report += f"   {i}. {prefix} → {file1}, {file2}\n"
+                if len(potential_duplicates) > 10:
+                    report += f"   ...以及其他 {len(potential_duplicates) - 10} 个\n"
+            else:
+                report += "\n5. 未发现重复文件名\n"
+                
+            # 如果有视频列表数据，比较与实际文件的差异
+            if self.video_links_data:
+                total_videos = len(self.video_links_data)
+                report += f"\n6. 当前视频列表中的视频总数: {total_videos}\n"
+                
+                # 检查文件名匹配情况
+                matched_files = 0
+                unmatched_videos = []
+                
+                # 创建一个字典，用于检测文件名冲突
+                filename_to_videos = {}
+                
+                # 首先，收集所有视频可能的文件名
+                for video_info in self.video_links_data:
+                    video_filename_base = video_info.get('video_filename_base', '')
+                    audio_filename_base = video_info.get('audio_filename_base', '')
+                    
+                    # 对于每个可能的扩展名，记录哪些视频会使用这个文件名
+                    for ext in media_extensions:
+                        if video_filename_base:
+                            full_filename = f"{video_filename_base}{ext}"
+                            if full_filename not in filename_to_videos:
+                                filename_to_videos[full_filename] = []
+                            filename_to_videos[full_filename].append(video_info)
+                            
+                        if audio_filename_base and audio_filename_base != video_filename_base:
+                            full_filename = f"{audio_filename_base}{ext}"
+                            if full_filename not in filename_to_videos:
+                                filename_to_videos[full_filename] = []
+                            filename_to_videos[full_filename].append(video_info)
+                
+                # 检查每个视频是否能匹配到文件
+                for video_info in self.video_links_data:
+                    video_filename_base = video_info.get('video_filename_base', '')
+                    audio_filename_base = video_info.get('audio_filename_base', '')
+                    
+                    if any(f.startswith(video_filename_base) for f in media_files) or \
+                       any(f.startswith(audio_filename_base) for f in media_files):
+                        matched_files += 1
+                    else:
+                        unmatched_videos.append(video_info)
+                
+                # 查找文件名冲突（多个视频使用相同文件名）
+                filename_conflicts = {}
+                for filename, videos in filename_to_videos.items():
+                    if len(videos) > 1 and any(filename == f or f.startswith(os.path.splitext(filename)[0] + '.') for f in media_files):
+                        filename_conflicts[filename] = videos
+                
+                report += f"7. 能匹配到文件名的视频数: {matched_files}\n"
+                report += f"8. 未匹配到文件的视频数: {total_videos - matched_files}\n"
+                
+                # 显示文件名冲突信息
+                if filename_conflicts:
+                    conflict_count = sum(len(videos) for videos in filename_conflicts.values()) - len(filename_conflicts)
+                    report += f"\n⚠️ 发现 {len(filename_conflicts)} 个文件名被多个视频使用，共涉及 {conflict_count + len(filename_conflicts)} 个视频！\n"
+                    report += "这意味着多个视频下载时会使用相同的文件名，导致后下载的覆盖先下载的。\n\n"
+                    report += "文件名冲突详情（最多显示10个）：\n"
+                    
+                    for i, (filename, videos) in enumerate(list(filename_conflicts.items())[:10], 1):
+                        report += f"{i}. 文件名: {filename} 被以下 {len(videos)} 个视频使用:\n"
+                        for j, video in enumerate(videos[:3], 1):
+                            report += f"   {j}. {video.get('display_title', '未知标题')} (URL: {video.get('url', '未知URL')})\n"
+                        if len(videos) > 3:
+                            report += f"   ...以及其他 {len(videos) - 3} 个视频\n"
+                    
+                    if len(filename_conflicts) > 10:
+                        report += f"...以及其他 {len(filename_conflicts) - 10} 个冲突文件名\n"
+                    
+                    report += "\n解决方案：\n"
+                    report += "1. 修改软件代码，在文件名中添加唯一标识符（如BV号）\n"
+                    report += "2. 手动重命名已下载的文件，然后重新下载缺失的视频\n"
+                    report += "3. 使用不同的下载目录，避免覆盖\n"
+                
+                # 检查文件数量差异
+                if matched_files < total_videos:
+                    report += f"\n⚠️ 警告：有 {total_videos - matched_files} 个视频在列表中但在文件夹中未找到对应文件！\n"
+                    report += "可能原因：\n"
+                    report += "- 文件命名冲突导致覆盖\n"
+                    report += "- 下载失败但计数增加\n"
+                    report += "- 文件被移动或删除\n"
+                    
+                    # 显示未匹配的视频信息
+                    if unmatched_videos:
+                        report += "\n未找到对应文件的视频列表（最多显示10个）：\n"
+                        for i, video in enumerate(unmatched_videos[:10], 1):
+                            report += f"{i}. {video.get('display_title', '未知标题')} (URL: {video.get('url', '未知URL')})\n"
+                        if len(unmatched_videos) > 10:
+                            report += f"...以及其他 {len(unmatched_videos) - 10} 个\n"
+                
+                # 检查文件夹中的文件是否都在视频列表中
+                if matched_files < len(media_files):
+                    extra_files = len(media_files) - matched_files
+                    report += f"\n⚠️ 注意：文件夹中有 {extra_files} 个媒体文件不在当前视频列表中\n"
+                    report += "可能原因：\n"
+                    report += "- 这些文件是从其他来源下载的\n"
+                    report += "- 文件名与视频标题不匹配\n"
+                    report += "- 之前下载的视频不在当前列表中\n"
+                    
+                # 总结文件数量差异
+                if total_videos != len(media_files):
+                    report += f"\n📊 总结：列表中有 {total_videos} 个视频，但文件夹中有 {len(media_files)} 个媒体文件，差异为 {abs(total_videos - len(media_files))} 个\n"
+                    
+                    if total_videos > len(media_files):
+                        missing_count = total_videos - len(media_files)
+                        report += f"⚠️ 缺少 {missing_count} 个文件！"
+                        
+                        if filename_conflicts:
+                            report += f"这很可能是由于发现的 {len(filename_conflicts)} 个文件名冲突导致的覆盖。\n"
+                        else:
+                            report += "这可能是由于文件命名冲突导致覆盖或下载失败。\n"
+                    else:
+                        extra_count = len(media_files) - total_videos
+                        report += f"⚠️ 多出 {extra_count} 个文件！这可能是由于之前下载的文件或其他来源的文件。\n"
+                        
+            # 显示分析报告
+            report_window = tk.Toplevel(self.root)
+            report_window.title("文件数量分析报告")
+            report_window.geometry("700x600")
+            report_window.resizable(True, True)
+            
+            report_text = scrolledtext.ScrolledText(report_window, wrap=tk.WORD, font=('Helvetica', 10))
+            report_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+            report_text.insert(tk.END, report)
+            report_text.config(state=tk.DISABLED)
+            
+            # 添加复制按钮
+            def copy_report():
+                report_window.clipboard_clear()
+                report_window.clipboard_append(report)
+                messagebox.showinfo("已复制", "报告已复制到剪贴板")
+                
+            copy_button = ttk.Button(report_window, text="复制报告", command=copy_report)
+            copy_button.pack(pady=10)
+            
+        except Exception as e:
+            messagebox.showerror("分析错误", f"分析文件夹时出错: {e}")
+            self._add_log_message(f"文件数量检查错误: {e}")
 
 if __name__ == '__main__':
     root = tk.Tk()

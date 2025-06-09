@@ -212,19 +212,6 @@ class BiliVideoCollector:
         match = re.search(bv_pattern, url)
         return match.group(0) if match else None
 
-    def extract_song_title(self, text_content):
-        try:
-            last_start_bracket = text_content.rfind('《')
-            if last_start_bracket != -1:
-                first_end_bracket_after_last_start = text_content.find('》', last_start_bracket + 1)
-                if first_end_bracket_after_last_start != -1:
-                    extracted = text_content[last_start_bracket + 1:first_end_bracket_after_last_start].strip()
-                    if extracted:
-                        return extracted
-        except Exception:
-            pass
-        return None
-
     def sanitize_filename(self, filename):
         if not isinstance(filename, str):
             filename = str(filename)
@@ -290,31 +277,21 @@ class BiliVideoCollector:
                     break
                 for v_data in archives:
                     if len(videos) < max_items:
-                        bilibili_raw_title = v_data.get('title', '未知标题').strip()
-                        preferred_song_title = self.extract_song_title(bilibili_raw_title)
-
-                        display_title = preferred_song_title if preferred_song_title else bilibili_raw_title
-                        audio_filename_base = preferred_song_title if preferred_song_title else bilibili_raw_title
-                        video_filename_base = bilibili_raw_title
-                        metadata_title_raw = preferred_song_title if preferred_song_title else bilibili_raw_title
-
-                        author_name = v_data.get('owner', {}).get('name', '未知作者')
+                        video_title = v_data.get('title', '未知标题').strip()
                         
-                        # 获取BV号作为唯一标识符
                         bvid = v_data.get('bvid', '')
                         
-                        # 在文件名中添加BV号作为唯一标识符
-                        audio_filename_base = f"{audio_filename_base}_[{bvid}]"
-                        video_filename_base = f"{video_filename_base}_[{bvid}]"
+                        filename_base = video_title
+                        
+                        author_name = v_data.get('owner', {}).get('name', '未知作者')
                         
                         videos.append({
-                            'display_title': self.sanitize_filename(display_title),
-                            'audio_filename_base': self.sanitize_filename(audio_filename_base),
-                            'video_filename_base': self.sanitize_filename(video_filename_base),
-                            'metadata_title_raw': metadata_title_raw,
-                            'url': f"https://www.bilibili.com/video/{v_data.get('bvid','')}?p={v_data.get('page',{}).get('page',1)}" if v_data.get('bvid') else '',
+                            'display_title': self.sanitize_filename(video_title),
+                            'filename_base': self.sanitize_filename(filename_base),
+                            'bvid': bvid,
+                            'metadata_title_raw': video_title,
+                            'url': f"https://www.bilibili.com/video/{bvid}?p={v_data.get('page',{}).get('page',1)}" if bvid else '',
                             'author': author_name,
-                            'bvid': bvid,  # 保存BV号以便后续使用
                             'tk_var': tk.BooleanVar(value=True) 
                         })
                     else:
@@ -331,6 +308,17 @@ class BiliVideoCollector:
             except Exception as e:
                 if progress_callback: progress_callback(f"未知错误 (页 {page_num}): {e}")
                 break
+                
+        filename_count = {}
+        for video in videos:
+            filename = video['filename_base']
+            filename_count[filename] = filename_count.get(filename, 0) + 1
+            
+        for video in videos:
+            filename = video['filename_base']
+            if filename_count[filename] > 1:
+                video['filename_base'] = f"{filename}_[{video['bvid']}]"
+                
         return videos[:max_items]
 
     def _clear_video_list_display(self):
@@ -473,48 +461,39 @@ class BiliVideoCollector:
 
                 if video_pages_data and isinstance(video_pages_data, list) and len(video_pages_data) > 0:
                     self._update_gui_safe(self.status_var.set, f"检测到多P视频，共 {len(video_pages_data)} P...")
+                    
+                    part_titles = {}
                     for part_info in video_pages_data:
-                        part_raw_title = part_info.get('part', video_title_overall).strip()
+                        part_title = part_info.get('part', video_title_overall).strip()
+                        part_titles[part_title] = part_titles.get(part_title, 0) + 1
+                    
+                    for part_info in video_pages_data:
+                        part_title = part_info.get('part', video_title_overall).strip()
                         page_num = part_info.get('page', 1)
-                        preferred_song_title = self.extract_song_title(part_raw_title)
-                        display_title = preferred_song_title if preferred_song_title else part_raw_title
-                        audio_filename_base = preferred_song_title if preferred_song_title else part_raw_title
-                        video_filename_base = part_raw_title
-                        metadata_title_raw = preferred_song_title if preferred_song_title else part_raw_title
                         
-                        # 在文件名中添加BV号和P数作为唯一标识符
-                        audio_filename_base = f"{audio_filename_base}_[{bvid}_p{page_num}]"
-                        video_filename_base = f"{video_filename_base}_[{bvid}_p{page_num}]"
+                        filename_base = part_title
+                        if part_titles[part_title] > 1:
+                            filename_base = f"{part_title}_p{page_num}"
                         
                         fetched_videos_result.append({
-                            'display_title': self.sanitize_filename(display_title),
-                            'audio_filename_base': self.sanitize_filename(audio_filename_base),
-                            'video_filename_base': self.sanitize_filename(video_filename_base),
-                            'metadata_title_raw': metadata_title_raw,
+                            'display_title': self.sanitize_filename(part_title),
+                            'filename_base': self.sanitize_filename(filename_base),
+                            'metadata_title_raw': part_title,
                             'url': f"https://www.bilibili.com/video/{bvid}?p={page_num}",
                             'author': author_name,
-                            'bvid': bvid,  # 保存BV号以便后续使用
+                            'bvid': bvid,
                             'tk_var': tk.BooleanVar(value=True)
                         })
                 else: 
-                    preferred_song_title = self.extract_song_title(video_title_overall)
-                    display_title = preferred_song_title if preferred_song_title else video_title_overall
-                    audio_filename_base = preferred_song_title if preferred_song_title else video_title_overall
-                    video_filename_base = video_title_overall
-                    metadata_title_raw = preferred_song_title if preferred_song_title else video_title_overall
-                    
-                    # 在文件名中添加BV号作为唯一标识符
-                    audio_filename_base = f"{audio_filename_base}_[{bvid}]"
-                    video_filename_base = f"{video_filename_base}_[{bvid}]"
+                    filename_base = video_title_overall
                     
                     fetched_videos_result.append({
-                        'display_title': self.sanitize_filename(display_title),
-                        'audio_filename_base': self.sanitize_filename(audio_filename_base),
-                        'video_filename_base': self.sanitize_filename(video_filename_base),
-                        'metadata_title_raw': metadata_title_raw,
+                        'display_title': self.sanitize_filename(video_title_overall),
+                        'filename_base': self.sanitize_filename(filename_base),
+                        'metadata_title_raw': video_title_overall,
                         'url': f"https://www.bilibili.com/video/{bvid}",
                         'author': author_name,
-                        'bvid': bvid,  # 保存BV号以便后续使用
+                        'bvid': bvid,
                         'tk_var': tk.BooleanVar(value=True)
                     })
 
@@ -633,11 +612,7 @@ class BiliVideoCollector:
             for idx, video_info in enumerate(links_to_download_info):
                 self.current_video_idx = idx 
 
-                title_for_filename = ""
-                if actual_mode == "audio_only":
-                    title_for_filename = video_info.get('audio_filename_base', '未知音频标题')
-                else:
-                    title_for_filename = video_info.get('video_filename_base', '未知视频标题')
+                title_for_filename = video_info.get('filename_base', '未知标题')
 
                 if not isinstance(title_for_filename, str):
                     title_for_filename = str(title_for_filename)
@@ -920,15 +895,11 @@ class BiliVideoCollector:
                 
             checked_count += 1
             
-            # 根据下载模式选择文件名基础
+            # 获取文件名基础
+            filename_base = video_info.get('filename_base', '')
             if actual_mode == "audio_only":
-                filename_base = video_info.get('audio_filename_base', '')
                 possible_extensions = ['.m4a', '.mp3', '.aac', '.wav', '.opus']
-            elif actual_mode == "video_only":
-                filename_base = video_info.get('video_filename_base', '')
-                possible_extensions = ['.mp4', '.mkv', '.webm']
-            else:  # merge mode
-                filename_base = video_info.get('video_filename_base', '')
+            else:  # video or merge mode
                 possible_extensions = ['.mp4', '.mkv', '.webm']
             
             # 检查是否存在对应文件
@@ -1012,8 +983,8 @@ class BiliVideoCollector:
                 
                 # 首先，收集所有视频可能的文件名
                 for video_info in self.video_links_data:
-                    video_filename_base = video_info.get('video_filename_base', '')
-                    audio_filename_base = video_info.get('audio_filename_base', '')
+                    video_filename_base = video_info.get('filename_base', '')
+                    audio_filename_base = video_info.get('filename_base', '')
                     
                     # 对于每个可能的扩展名，记录哪些视频会使用这个文件名
                     for ext in media_extensions:
@@ -1031,8 +1002,8 @@ class BiliVideoCollector:
                 
                 # 检查每个视频是否能匹配到文件
                 for video_info in self.video_links_data:
-                    video_filename_base = video_info.get('video_filename_base', '')
-                    audio_filename_base = video_info.get('audio_filename_base', '')
+                    video_filename_base = video_info.get('filename_base', '')
+                    audio_filename_base = video_info.get('filename_base', '')
                     
                     if any(f.startswith(video_filename_base) for f in media_files) or \
                        any(f.startswith(audio_filename_base) for f in media_files):

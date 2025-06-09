@@ -23,7 +23,7 @@ try:
 except ImportError:
     pyperclip = None
 
-class BilibiliCrawler:
+class BiliVideoCollector:
     def __init__(self, root):
         self.root = root
         self.root.title("Bili-Series-Downloader (Modern UI)")
@@ -72,8 +72,8 @@ class BilibiliCrawler:
         ttk.Label(input_frame, text="B站视频/合集链接:").grid(row=0, column=0, sticky="w", padx=(0, 5))
         self.url_entry = ttk.Entry(input_frame, width=60)
         self.url_entry.grid(row=0, column=1, sticky="ew", padx=5)
-        self.crawl_button = ttk.Button(input_frame, text="获取链接", command=self.start_crawl_videos)
-        self.crawl_button.grid(row=0, column=2, sticky="e", padx=5)
+        self.fetch_button = ttk.Button(input_frame, text="获取链接", command=self.start_fetch_videos)
+        self.fetch_button.grid(row=0, column=2, sticky="e", padx=5)
 
         result_outer_frame = ttk.Frame(self.main_frame)
         result_outer_frame.grid(row=1, column=0, sticky="nsew", pady=5)
@@ -369,15 +369,15 @@ class BilibiliCrawler:
         self.scrollable_frame.update_idletasks()
         self.video_list_canvas.config(scrollregion=self.video_list_canvas.bbox("all"))
 
-    def _display_crawl_results(self, crawled_videos_data):
+    def _display_fetch_results(self, fetched_videos_data):
         self._clear_video_list_display() 
 
-        if not crawled_videos_data:
+        if not fetched_videos_data:
             self._add_log_message("未能获取到任何视频链接。")
             self.status_var.set("未找到视频或获取失败")
             return
 
-        self.video_links_data = crawled_videos_data 
+        self.video_links_data = fetched_videos_data 
 
         for i, video_info in enumerate(self.video_links_data):
             item_frame = ttk.Frame(self.scrollable_frame, padding=(5,2))
@@ -407,7 +407,7 @@ class BilibiliCrawler:
         self.video_list_canvas.config(scrollregion=self.video_list_canvas.bbox("all"))
 
 
-    def _crawl_videos_worker(self, url):
+    def _fetch_videos_worker(self, url):
         try:
             self._update_gui_safe(self.status_var.set, "正在提取BV号...")
             bvid = self.extract_bvid(url)
@@ -421,15 +421,15 @@ class BilibiliCrawler:
             initial_video_data_container = []
             season_id = self.get_collection_id(bvid, initial_video_data_container)
             
-            crawled_videos_result = []
+            fetched_videos_result = []
 
             if season_id:
                 self._update_gui_safe(self.status_var.set, f"检测到合集 (ID: {season_id})，正在拉取列表...")
-                crawled_videos_result = self.get_collection_videos(
+                fetched_videos_result = self.get_collection_videos(
                     season_id, 1000,
                     progress_callback=lambda msg: self._update_gui_safe(self.status_var.set, msg)
                 )
-                if not crawled_videos_result:
+                if not fetched_videos_result:
                     self._update_gui_safe(messagebox.showinfo, "提示", "未能从该合集获取到任何视频。")
                     self._update_gui_safe(self.status_var.set, "合集为空或获取失败")
 
@@ -486,7 +486,7 @@ class BilibiliCrawler:
                         audio_filename_base = f"{audio_filename_base}_[{bvid}_p{page_num}]"
                         video_filename_base = f"{video_filename_base}_[{bvid}_p{page_num}]"
                         
-                        crawled_videos_result.append({
+                        fetched_videos_result.append({
                             'display_title': self.sanitize_filename(display_title),
                             'audio_filename_base': self.sanitize_filename(audio_filename_base),
                             'video_filename_base': self.sanitize_filename(video_filename_base),
@@ -507,7 +507,7 @@ class BilibiliCrawler:
                     audio_filename_base = f"{audio_filename_base}_[{bvid}]"
                     video_filename_base = f"{video_filename_base}_[{bvid}]"
                     
-                    crawled_videos_result.append({
+                    fetched_videos_result.append({
                         'display_title': self.sanitize_filename(display_title),
                         'audio_filename_base': self.sanitize_filename(audio_filename_base),
                         'video_filename_base': self.sanitize_filename(video_filename_base),
@@ -518,34 +518,34 @@ class BilibiliCrawler:
                         'tk_var': tk.BooleanVar(value=True)
                     })
 
-                if not crawled_videos_result:
+                if not fetched_videos_result:
                      self._update_gui_safe(messagebox.showinfo, "提示", "未能解析该单个视频的信息。")
                      self._update_gui_safe(self.status_var.set, "单个视频解析失败")
 
-            self._update_gui_safe(self._display_crawl_results, crawled_videos_result)
+            self._update_gui_safe(self._display_fetch_results, fetched_videos_result)
 
         except requests.exceptions.RequestException as e:
-            self._update_gui_safe(messagebox.showerror, "网络错误", f"爬取过程中发生网络错误: {e}")
+            self._update_gui_safe(messagebox.showerror, "网络错误", f"获取过程中发生网络错误: {e}")
             self._update_gui_safe(self.status_var.set, f"网络错误: {e}")
             self._update_gui_safe(self._add_log_message, f"错误: 网络错误: {e}")
         except Exception as e:
-            self._update_gui_safe(messagebox.showerror, "严重错误", f"爬取过程中发生未知错误: {e}")
+            self._update_gui_safe(messagebox.showerror, "严重错误", f"获取过程中发生未知错误: {e}")
             self._update_gui_safe(self.status_var.set, f"严重错误: {e}")
             self._update_gui_safe(self._add_log_message, f"错误: 严重错误: {e}")
 
 
-    def start_crawl_videos(self):
+    def start_fetch_videos(self):
         url = self.url_entry.get().strip()
         if not url:
             messagebox.showwarning("警告", "请输入B站视频或合集链接。")
             return
-        self.crawl_button.config(state=tk.DISABLED)
+        self.fetch_button.config(state=tk.DISABLED)
         self._clear_video_list_display() 
         self._update_gui_safe(self.status_var.set, "正在处理请求...")
         self._update_gui_safe(self._add_log_message, "开始获取视频链接...") 
-        thread = threading.Thread(target=self._crawl_videos_worker, args=(url,), daemon=True)
+        thread = threading.Thread(target=self._fetch_videos_worker, args=(url,), daemon=True)
         thread.start()
-        self._check_thread_status(thread, self.crawl_button)
+        self._check_thread_status(thread, self.fetch_button)
 
     def choose_folder(self):
         folder = filedialog.askdirectory(initialdir=self.download_folder)
@@ -1138,5 +1138,5 @@ class BilibiliCrawler:
 
 if __name__ == '__main__':
     root = tk.Tk()
-    app = BilibiliCrawler(root)
+    app = BiliVideoCollector(root)
     root.mainloop()

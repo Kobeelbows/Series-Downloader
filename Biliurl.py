@@ -7,6 +7,7 @@ import os
 import threading
 import subprocess
 import sys # Moved import to top for robust path handling, e.g. when frozen
+import time # 添加time模块用于请求间隔控制
 
 # Attempt to import yt_dlp and its specific DownloadError
 YTDLPDownloadError = None # Placeholder for the specific error class
@@ -32,6 +33,30 @@ class BiliVideoCollector:
         self.root.configure(bg="#ECEFF1") 
 
         self.ffmpeg_directory_override = r"C:\ProgramData\chocolatey\bin"
+
+        # 添加新的属性
+        self.max_concurrent_downloads = 2 # 最大并发下载数
+        self.filename_template = "{title}_{bvid}" # 默认文件名模板
+        self.active_downloads = 0 # 当前活动下载数
+        self.download_queue = [] # 下载队列
+        self.download_threads = [] # 存储下载线程
+        self.download_progress = {} # 存储下载进度
+        self.download_speed = {} # 存储下载速度
+        self.download_status = {} # 存储下载状态
+        
+        # 添加格式选项
+        self.video_format = "mp4"  # 默认视频格式
+        self.audio_format = "m4a"  # 默认音频格式
+        self.video_quality = "best"  # 默认视频质量
+        self.video_codec = "auto"  # 默认视频编码
+        self.audio_quality = "best"  # 默认音频质量
+        self.audio_channel = "stereo"  # 默认声道
+        self.embed_subtitle = False  # 默认不嵌入字幕
+        self.download_danmaku = False  # 默认不下载弹幕
+        self.prefer_dash = True  # 默认使用DASH
+        self.embed_thumbnail = True  # 默认嵌入缩略图
+        self.embed_metadata = True  # 默认嵌入元数据
+        self.custom_params = ""  # 默认无自定义参数
 
         self.style = ttk.Style()
         self.style.theme_use('clam') 
@@ -74,13 +99,13 @@ class BiliVideoCollector:
         self.url_entry.grid(row=0, column=1, sticky="ew", padx=5)
         self.fetch_button = ttk.Button(input_frame, text="获取链接", command=self.start_fetch_videos)
         self.fetch_button.grid(row=0, column=2, sticky="e", padx=5)
-
+        
         result_outer_frame = ttk.Frame(self.main_frame)
-        result_outer_frame.grid(row=1, column=0, sticky="nsew", pady=5)
+        result_outer_frame.grid(row=2, column=0, sticky="nsew", pady=5)
         result_outer_frame.rowconfigure(1, weight=1) 
         result_outer_frame.columnconfigure(0, weight=1) 
 
-        self.main_frame.rowconfigure(1, weight=1) 
+        self.main_frame.rowconfigure(2, weight=1) 
 
         select_all_frame = ttk.Frame(result_outer_frame)
         select_all_frame.grid(row=0, column=0, sticky="ew", pady=(0,5))
@@ -109,37 +134,66 @@ class BiliVideoCollector:
         self.video_list_canvas.bind_all("<Button-5>", self._on_mousewheel) 
 
         action_frame_container = ttk.Frame(self.main_frame)
-        action_frame_container.grid(row=2, column=0, sticky="ew", pady=(10, 5))
+        action_frame_container.grid(row=3, column=0, sticky="ew", pady=(10, 5))
         action_frame_container.columnconfigure(0, weight=1) 
 
         action_frame_row1 = ttk.Frame(action_frame_container)
         action_frame_row1.pack(fill=tk.X, pady=(0,5))
+        action_frame_row1.columnconfigure(0, weight=1)
+        action_frame_row1.columnconfigure(1, weight=1) 
+        action_frame_row1.columnconfigure(2, weight=1)
+        action_frame_row1.columnconfigure(3, weight=1)
 
         self.copy_button = ttk.Button(action_frame_row1, text="复制选中链接", command=self.copy_selected_links)
-        self.copy_button.pack(side=tk.LEFT, padx=5)
-        self.clear_button = ttk.Button(action_frame_row1, text="清除列表", command=self.clear_results)
-        self.clear_button.pack(side=tk.LEFT, padx=5)
-        self.folder_button = ttk.Button(action_frame_row1, text="选择下载目录", command=self.choose_folder)
-        self.folder_button.pack(side=tk.LEFT, padx=5)
+        self.copy_button.grid(row=0, column=0, padx=5, sticky="ew")
         
-        self.retry_button = ttk.Button(action_frame_row1, text="重试失败任务", command=self.retry_failed_downloads)
-        self.retry_button.pack(side=tk.LEFT, padx=5)
-        self.retry_button.config(state=tk.DISABLED)
-
-        self.check_duplicates_button = ttk.Button(action_frame_row1, text="检查重复文件", command=self.check_duplicate_files)
-        self.check_duplicates_button.pack(side=tk.LEFT, padx=5)
-
-        self.check_count_button = ttk.Button(action_frame_row1, text="检查文件数量", command=self.check_file_count)
-        self.check_count_button.pack(side=tk.LEFT, padx=5)
+        self.clear_button = ttk.Button(action_frame_row1, text="清除列表", command=self.clear_results)
+        self.clear_button.grid(row=0, column=1, padx=5, sticky="ew")
+        
+        self.folder_button = ttk.Button(action_frame_row1, text="选择下载目录", command=self.choose_folder)
+        self.folder_button.grid(row=0, column=2, padx=5, sticky="ew")
+        
+        self.filename_template_button = ttk.Button(action_frame_row1, text="文件名模板", command=self.show_filename_template_dialog)
+        self.filename_template_button.grid(row=0, column=3, padx=5, sticky="ew")
 
         action_frame_row2 = ttk.Frame(action_frame_container)
         action_frame_row2.pack(fill=tk.X, pady=(5,0))
+        action_frame_row2.columnconfigure(0, weight=1)
+        action_frame_row2.columnconfigure(1, weight=1)
+        action_frame_row2.columnconfigure(2, weight=1)
+        action_frame_row2.columnconfigure(3, weight=1)
+        
+        self.format_settings_button = ttk.Button(action_frame_row2, text="格式设置", command=self.show_format_settings_dialog)
+        self.format_settings_button.grid(row=0, column=0, padx=5, sticky="ew")
+        
+        self.download_settings_button = ttk.Button(action_frame_row2, text="下载设置", command=self.show_download_settings_dialog)
+        self.download_settings_button.grid(row=0, column=1, padx=5, sticky="ew")
 
-        self.download_button = ttk.Button(action_frame_row2, text="下载选中视频", command=self.start_download_videos)
-        self.download_button.pack(side=tk.LEFT, padx=5)
+        self.check_duplicates_button = ttk.Button(action_frame_row2, text="检查重复文件", command=self.check_duplicate_files)
+        self.check_duplicates_button.grid(row=0, column=2, padx=5, sticky="ew")
 
-        self.download_mode_label = ttk.Label(action_frame_row2, text="下载模式:")
-        self.download_mode_label.pack(side=tk.LEFT, padx=(10, 2))
+        self.check_count_button = ttk.Button(action_frame_row2, text="检查文件数量", command=self.check_file_count)
+        self.check_count_button.grid(row=0, column=3, padx=5, sticky="ew")
+        
+        self.retry_button = ttk.Button(action_frame_container, text="重试失败任务", command=self.retry_failed_downloads)
+        self.retry_button.pack(fill=tk.X, pady=(5,0))
+        self.retry_button.config(state=tk.DISABLED)
+
+        download_frame = ttk.Frame(self.main_frame)
+        download_frame.grid(row=4, column=0, sticky="ew", pady=(10,5))
+        download_frame.columnconfigure(0, weight=2)
+        download_frame.columnconfigure(1, weight=3)
+
+        self.download_button = ttk.Button(download_frame, text="下载选中视频", command=self.start_download_videos)
+        self.download_button.grid(row=0, column=0, sticky="ew", padx=(0,5))
+
+        mode_frame = ttk.Frame(download_frame)
+        mode_frame.grid(row=0, column=1, sticky="ew")
+        mode_frame.columnconfigure(1, weight=1)
+        
+        self.download_mode_label = ttk.Label(mode_frame, text="下载模式:")
+        self.download_mode_label.grid(row=0, column=0, padx=(0,5))
+        
         self.download_mode_var = tk.StringVar()
         self.download_mode_options = {
             "合并音视频": "merge",
@@ -147,18 +201,17 @@ class BiliVideoCollector:
             "仅视频 (无声)": "video_only"
         }
         self.download_mode_combo = ttk.Combobox(
-            action_frame_row2,
+            mode_frame,
             textvariable=self.download_mode_var,
             values=list(self.download_mode_options.keys()),
             state="readonly",
-            width=28,
             font=('Helvetica', 10)
         )
-        self.download_mode_combo.pack(side=tk.LEFT, padx=5)
+        self.download_mode_combo.grid(row=0, column=1, sticky="ew")
         self.download_mode_combo.set(list(self.download_mode_options.keys())[0])
 
         log_frame = ttk.Frame(self.main_frame)
-        log_frame.grid(row=3, column=0, sticky="ew", pady=(5,0))
+        log_frame.grid(row=5, column=0, sticky="ew", pady=(5,0))
         log_frame.columnconfigure(0, weight=1)
         
         ttk.Label(log_frame, text="日志:").pack(anchor=tk.W)
@@ -175,9 +228,24 @@ class BiliVideoCollector:
         self.status_var.set(f"准备就绪. 下载目录: {self.download_folder}")
         self.current_video_idx = 0
 
+        # 更新请求头，添加更多字段以通过风控机制
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Referer': 'https://www.bilibili.com'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36 Edg/113.0.1774.57',
+            'Referer': 'https://www.bilibili.com',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache',
+            'Sec-Ch-Ua': '"Microsoft Edge";v="113", "Chromium";v="113", "Not-A.Brand";v="24"',
+            'Sec-Ch-Ua-Mobile': '?0',
+            'Sec-Ch-Ua-Platform': '"Windows"',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'same-origin',
+            'Sec-Fetch-User': '?1',
+            'Upgrade-Insecure-Requests': '1'
         }
 
         self.failed_downloads = []
@@ -616,6 +684,11 @@ class BiliVideoCollector:
 
                 if not isinstance(title_for_filename, str):
                     title_for_filename = str(title_for_filename)
+                
+                # 使用模板生成文件名
+                templated_filename = self.apply_filename_template(self.filename_template, video_info, idx)
+                if templated_filename:
+                    title_for_filename = templated_filename
 
                 current_outtmpl = os.path.join(self.download_folder, f"{title_for_filename}.%(ext)s")
 
@@ -640,10 +713,21 @@ class BiliVideoCollector:
                 if actual_mode == "audio_only":
                     loop_ydl_opts['format'] = 'bestaudio/best'
                     loop_ydl_opts['extract_audio'] = True
-                    loop_ydl_opts['audio_format'] = 'm4a'
+                    loop_ydl_opts['audio_format'] = self.audio_format  # 使用设置的音频格式
                 elif actual_mode == "merge":
-                    loop_ydl_opts['format'] = 'bestvideo+bestaudio/best'
-                    loop_ydl_opts['merge_output_format'] = 'mp4'
+                    if self.video_quality == "best":
+                        format_string = 'bestvideo+bestaudio/best'
+                    elif self.video_quality == "1080":
+                        format_string = 'bestvideo[height<=1080]+bestaudio/best[height<=1080]'
+                    elif self.video_quality == "720":
+                        format_string = 'bestvideo[height<=720]+bestaudio/best[height<=720]'
+                    elif self.video_quality == "480":
+                        format_string = 'bestvideo[height<=480]+bestaudio/best[height<=480]'
+                    else:
+                        format_string = 'bestvideo+bestaudio/best'
+                    
+                    loop_ydl_opts['format'] = format_string
+                    loop_ydl_opts['merge_output_format'] = self.video_format  # 使用设置的视频格式
                     loop_ydl_opts['postprocessors'] = [{'key': 'FFmpegMerger'}]
                 elif actual_mode == "video_only":
                     loop_ydl_opts['format'] = 'bestvideo[acodec=none]/bestvideo'
@@ -791,13 +875,452 @@ class BiliVideoCollector:
                 self._add_log_message("下载中止: 未选择有效的下载目录。")
                 return
 
+        # 添加到下载队列并启动多线程下载
         self.download_button.config(state=tk.DISABLED)
         self._update_gui_safe(self.status_var.set, f"正在初始化下载 {len(selected_videos)} 个选定视频...")
         self._update_gui_safe(self._add_log_message, f"开始下载 {len(selected_videos)} 个选定视频...")
-        thread = threading.Thread(target=self._download_videos_worker, daemon=True)
-        thread.start()
-        self._check_thread_status(thread, self.download_button)
+        
+        # 清理已完成的下载线程
+        self.download_threads = [t for t in self.download_threads if t.is_alive()]
+        
+        # 将选中的视频加入队列
+        for video in selected_videos:
+            if video not in self.download_queue:
+                self.download_queue.append(video)
+        
+        # 启动下载管理线程
+        if not any(t.name == "download_manager" for t in self.download_threads):
+            download_manager_thread = threading.Thread(
+                target=self._download_manager_worker, 
+                daemon=True,
+                name="download_manager"
+            )
+            self.download_threads.append(download_manager_thread)
+            download_manager_thread.start()
+        
+        # 启用下载按钮，用户可以继续添加任务
+        self.root.after(1000, lambda: self._update_gui_safe(self.download_button.config, state=tk.NORMAL))
 
+    def _download_manager_worker(self):
+        """管理下载队列和并发数量的线程"""
+        while True:
+            try:
+                # 清理已完成的下载线程
+                self.download_threads = [t for t in self.download_threads if t.is_alive()]
+                
+                # 计算当前活动下载数
+                active_count = sum(1 for t in self.download_threads if t.name.startswith("download_worker"))
+                self.active_downloads = active_count
+                
+                # 如果有等待的下载任务且当前活动下载数小于最大并发数，启动新的下载
+                while self.download_queue and active_count < self.max_concurrent_downloads:
+                    next_video = self.download_queue[0]
+                    self.download_queue.pop(0)
+                    
+                    # 为每个下载视频创建唯一ID，用于跟踪进度
+                    download_id = f"dl_{next_video['bvid']}_{int(time.time())}"
+                    self.download_progress[download_id] = 0
+                    self.download_speed[download_id] = "0 KiB/s"
+                    self.download_status[download_id] = "等待中"
+                    
+                    # 创建并启动下载线程
+                    download_thread = threading.Thread(
+                        target=self._download_single_video_worker,
+                        args=(next_video, download_id),
+                        daemon=True,
+                        name=f"download_worker_{download_id}"
+                    )
+                    self.download_threads.append(download_thread)
+                    download_thread.start()
+                    
+                    # 更新当前活动下载数
+                    active_count += 1
+                    self.active_downloads = active_count
+                    
+                    # 更新状态栏
+                    self._update_gui_safe(
+                        self.status_var.set,
+                        f"当前活动下载: {active_count}/{self.max_concurrent_downloads}, 队列中: {len(self.download_queue)}"
+                    )
+                    
+                    # 短暂延迟，避免同时启动多个下载
+                    time.sleep(0.5)
+                
+                # 如果没有活动下载且队列为空，退出管理线程
+                if active_count == 0 and not self.download_queue:
+                    self._update_gui_safe(self.status_var.set, "所有下载任务已完成")
+                    self._update_gui_safe(self._add_log_message, "下载管理器: 所有任务完成")
+                    break
+                    
+                # 每秒更新一次状态
+                time.sleep(1)
+                
+            except Exception as e:
+                self._update_gui_safe(self._add_log_message, f"下载管理器错误: {e}")
+                time.sleep(5)  # 出错后等待一段时间再继续
+    
+    def _download_single_video_worker(self, video_info, download_id):
+        """下载单个视频的工作线程"""
+        self.download_status[download_id] = "准备中"
+        self._update_gui_safe(self._add_log_message, f"开始下载: {video_info['display_title']}")
+        
+        # 获取FFmpeg位置
+        ffmpeg_dir_for_yt_dlp = None
+        if sys.platform.startswith('win'):
+            # Windows平台
+            try:
+                if self.ffmpeg_directory_override and os.path.exists(self.ffmpeg_directory_override):
+                    ffmpeg_path = os.path.join(self.ffmpeg_directory_override, "ffmpeg.exe")
+                    if os.path.exists(ffmpeg_path):
+                        ffmpeg_dir_for_yt_dlp = self.ffmpeg_directory_override
+                        self._update_gui_safe(self._add_log_message, f"使用指定的FFmpeg目录: {ffmpeg_dir_for_yt_dlp}")
+                
+                if not ffmpeg_dir_for_yt_dlp:
+                    # 尝试在PATH中找FFmpeg
+                    try:
+                        if subprocess.run(['ffmpeg', '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE).returncode == 0:
+                            ffmpeg_dir_for_yt_dlp = None  # yt-dlp可以直接从PATH找到它
+                            self._update_gui_safe(self._add_log_message, "在系统PATH中找到了FFmpeg")
+                    except FileNotFoundError:
+                        self._update_gui_safe(self._add_log_message, "在系统PATH中未找到FFmpeg")
+                    
+                    # 尝试几个可能的目录位置
+                    potential_paths = [
+                        r"C:\Program Files\ffmpeg\bin",
+                        r"C:\ffmpeg\bin",
+                        r"C:\ProgramData\chocolatey\bin",
+                        os.path.join(os.path.expanduser("~"), "ffmpeg", "bin")
+                    ]
+                    
+                    for path in potential_paths:
+                        ffmpeg_exe = os.path.join(path, "ffmpeg.exe")
+                        if os.path.exists(ffmpeg_exe):
+                            ffmpeg_dir_for_yt_dlp = path
+                            self._update_gui_safe(self._add_log_message, f"自动找到FFmpeg: {path}")
+                            break
+                    
+            except Exception as e:
+                self._update_gui_safe(self._add_log_message, f"检查FFmpeg时出错: {e}")
+        else:
+            # 非Windows平台
+            try:
+                # 尝试检查ffmpeg是否可用
+                if subprocess.run(['ffmpeg', '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE).returncode == 0:
+                    ffmpeg_dir_for_yt_dlp = None  # yt-dlp可以直接从PATH找到它
+                    self._update_gui_safe(self._add_log_message, "找到了FFmpeg")
+            except FileNotFoundError:
+                self._update_gui_safe(self._add_log_message, "警告：未找到FFmpeg，可能影响下载和合并")
+                
+        # 构建文件名
+        templated_filename = self.apply_filename_template(self.filename_template, video_info)
+        
+        current_outtmpl = os.path.join(self.download_folder, f"{templated_filename}.%(ext)s")
+        
+        # 准备下载选项
+        self.download_status[download_id] = "配置选项"
+        
+        selected_mode_key = self.download_mode_var.get()
+        actual_mode = self.download_mode_options.get(selected_mode_key, "merge")
+        
+        progress_hook = lambda d: self._single_video_progress_hook(d, download_id, video_info)
+        postprocessor_hook = lambda d: self._single_video_postprocessor_hook(d, download_id, video_info)
+        
+        # 基础yt-dlp选项
+        loop_ydl_opts = {
+            'noplaylist': True,
+            'nocheckcertificate': True,
+            'quiet': False,
+            'ignoreerrors': False,
+            'progress_hooks': [progress_hook],
+            'postprocessor_hooks': [postprocessor_hook],
+            'restrictfilenames': False,
+            'outtmpl': current_outtmpl,
+            'postprocessors': [],
+            'postprocessor_args': {},
+            'retries': 5,  # 添加重试次数
+            'fragment_retries': 5,  # 添加片段重试次数
+            'continuedl': True,  # 启用断点续传
+            'noprogress': False
+        }
+        
+        if ffmpeg_dir_for_yt_dlp:
+            loop_ydl_opts['ffmpeg_location'] = ffmpeg_dir_for_yt_dlp
+            
+        # 根据用户选择的视频质量设置format选项
+        if self.video_quality != "best":
+            if actual_mode == "merge":
+                # 设置视频质量限制
+                if self.video_quality == "1080":
+                    loop_ydl_opts['format'] = 'bestvideo[height<=1080]+bestaudio/best[height<=1080]'
+                elif self.video_quality == "720":
+                    loop_ydl_opts['format'] = 'bestvideo[height<=720]+bestaudio/best[height<=720]'
+                elif self.video_quality == "480":
+                    loop_ydl_opts['format'] = 'bestvideo[height<=480]+bestaudio/best[height<=480]'
+                elif self.video_quality == "360":
+                    loop_ydl_opts['format'] = 'bestvideo[height<=360]+bestaudio/best[height<=360]'
+                elif self.video_quality == "240":
+                    loop_ydl_opts['format'] = 'bestvideo[height<=240]+bestaudio/best[height<=240]'
+            elif actual_mode == "video_only":
+                if self.video_quality == "1080":
+                    loop_ydl_opts['format'] = 'bestvideo[height<=1080]'
+                elif self.video_quality == "720":
+                    loop_ydl_opts['format'] = 'bestvideo[height<=720]'
+                elif self.video_quality == "480":
+                    loop_ydl_opts['format'] = 'bestvideo[height<=480]'
+                elif self.video_quality == "360":
+                    loop_ydl_opts['format'] = 'bestvideo[height<=360]'
+                elif self.video_quality == "240":
+                    loop_ydl_opts['format'] = 'bestvideo[height<=240]'
+        else:
+            # 使用最佳质量
+            if actual_mode == "merge":
+                if self.prefer_dash:
+                    loop_ydl_opts['format'] = 'bestvideo+bestaudio/best'
+                else:
+                    loop_ydl_opts['format'] = 'best'
+            elif actual_mode == "video_only":
+                loop_ydl_opts['format'] = 'bestvideo'
+            elif actual_mode == "audio_only":
+                loop_ydl_opts['format'] = 'bestaudio'
+        
+        # 设置视频编码偏好
+        if self.video_codec != "auto" and (actual_mode == "merge" or actual_mode == "video_only"):
+            if 'format' in loop_ydl_opts:
+                loop_ydl_opts['format'] += f'[vcodec*={self.video_codec}]'
+            else:
+                if actual_mode == "merge":
+                    loop_ydl_opts['format'] = f'bestvideo[vcodec*={self.video_codec}]+bestaudio/best'
+                else:
+                    loop_ydl_opts['format'] = f'bestvideo[vcodec*={self.video_codec}]'
+        
+        # 处理音频偏好
+        if actual_mode == "audio_only":
+            # 设置输出格式
+            audio_format = self.audio_format
+            
+            # 添加音频提取后处理器
+            audio_postprocessor = {
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': audio_format,
+            }
+            
+            # 设置音频质量
+            if self.audio_quality != "best":
+                audio_postprocessor['preferredquality'] = self.audio_quality
+                
+            # 设置音频声道
+            if self.audio_channel == "mono":
+                if 'postprocessor_args' not in loop_ydl_opts:
+                    loop_ydl_opts['postprocessor_args'] = {}
+                loop_ydl_opts['postprocessor_args']['FFmpegExtractAudio'] = ['-ac', '1']
+                
+            loop_ydl_opts['postprocessors'].append(audio_postprocessor)
+                
+        # 处理视频合并偏好
+        elif actual_mode == "merge":
+            # 设置输出格式
+            if 'format' not in loop_ydl_opts:
+                loop_ydl_opts['format'] = 'bestvideo+bestaudio/best'
+                
+            # 添加合并后处理器
+            merge_format = self.video_format
+            loop_ydl_opts['merge_output_format'] = merge_format
+            
+            # 如果需要嵌入缩略图
+            if self.embed_thumbnail:
+                loop_ydl_opts['postprocessors'].append({
+                    'key': 'EmbedThumbnail',
+                })
+                loop_ydl_opts['writethumbnail'] = True
+                
+        # 只下载视频时设置格式
+        elif actual_mode == "video_only":
+            if 'format' not in loop_ydl_opts:
+                loop_ydl_opts['format'] = 'bestvideo'
+                
+            # 设置视频格式
+            video_format = self.video_format
+            loop_ydl_opts['merge_output_format'] = video_format
+        
+        # 嵌入元数据选项
+        if self.embed_metadata:
+            loop_ydl_opts['postprocessors'].append({
+                'key': 'FFmpegMetadata',
+                'add_metadata': True,
+            })
+        
+        # 字幕选项
+        if self.embed_subtitle:
+            loop_ydl_opts['postprocessors'].append({
+                'key': 'FFmpegEmbedSubtitle',
+            })
+            loop_ydl_opts['writesubtitles'] = True
+            loop_ydl_opts['writeautomaticsub'] = True
+            
+        # 弹幕下载
+        if self.download_danmaku:
+            loop_ydl_opts['getcomments'] = True
+        
+        # 添加自定义参数
+        if self.custom_params:
+            try:
+                # 分割自定义参数
+                custom_args = self.custom_params.split()
+                for i in range(0, len(custom_args), 2):
+                    if i+1 < len(custom_args):
+                        arg = custom_args[i]
+                        val = custom_args[i+1]
+                        
+                        # 去掉前导--
+                        if arg.startswith('--'):
+                            arg = arg[2:]
+                            
+                        # 转换布尔值
+                        if val.lower() == 'true':
+                            val = True
+                        elif val.lower() == 'false':
+                            val = False
+                        # 转换数字
+                        elif val.isdigit():
+                            val = int(val)
+                        
+                        loop_ydl_opts[arg] = val
+            except Exception as e:
+                self._update_gui_safe(self._add_log_message, f"解析自定义参数时出错: {e}")
+        
+        # 执行下载
+        try:
+            with yt_dlp.YoutubeDL(loop_ydl_opts) as ydl:
+                ydl.download([video_info['url']])
+            self.download_status[download_id] = "已完成"
+            self._update_gui_safe(self._add_log_message, f"成功下载: {video_info['display_title']}")
+        except Exception as e:
+            error_message = str(e)
+            is_ytdlp_error = YTDLPDownloadError is not None and isinstance(e, YTDLPDownloadError)
+            
+            if is_ytdlp_error:
+                self._add_log_message(f"yt-dlp 错误 '{video_info['display_title']}': {error_message}")
+                if "ffmpeg" in error_message.lower() or "ffprobe" in error_message.lower() or "merge" in error_message.lower():
+                    error_message_display = f"合并/处理失败 (FFmpeg相关): {error_message}"
+                else:
+                    error_message_display = f"yt-dlp 下载/处理错误: {error_message}"
+            else:
+                self._add_log_message(f"下载 '{video_info['display_title']}' 时发生错误: {error_message}")
+                error_message_display = f"下载时发生未知错误: {error_message}"
+            
+            self.download_status[download_id] = "失败"
+            self.failed_downloads.append(video_info)
+            self._update_gui_safe(self._add_log_message, f"下载失败: {video_info['display_title']} - {error_message_display}")
+    
+        # 检查是否需要启用重试按钮
+        self._update_gui_safe(self.retry_button.config, state=tk.NORMAL if self.failed_downloads else tk.DISABLED)
+
+    def _single_video_progress_hook(self, d, download_id, video_info):
+        """单个视频的下载进度回调"""
+        status = d.get('status')
+        
+        if status == 'downloading':
+            # 更新进度信息
+            percent = d.get('_percent_str', 'N/A').strip()
+            speed = d.get('_speed_str', 'N/A').strip()
+            eta = d.get('_eta_str', 'N/A').strip()
+            
+            # 计算百分比数值（用于进度条）
+            if percent != 'N/A' and percent.endswith('%'):
+                try:
+                    percent_value = float(percent[:-1])
+                    self.download_progress[download_id] = percent_value
+                except ValueError:
+                    pass
+            
+            # 保存速度信息
+            self.download_speed[download_id] = speed
+            
+            # 更新状态信息
+            status_msg = f"下载中: {percent} at {speed}, ETA {eta}"
+            self.download_status[download_id] = status_msg
+            
+            # 更新状态栏显示下载状态
+            title = video_info.get('display_title', '未知标题')[:20] + "..."
+            status_text = f"下载: {title} - {percent} at {speed}, ETA {eta}"
+            self._update_gui_safe(self.status_var.set, status_text)
+            
+        elif status == 'finished':
+            self.download_progress[download_id] = 100
+            self.download_status[download_id] = "下载完成，等待处理"
+            self._update_gui_safe(self.status_var.set, f"下载完成，等待处理: {video_info.get('display_title', '未知标题')[:20]}...")
+            
+        elif status == 'error':
+            self.download_status[download_id] = "下载错误"
+            self._update_gui_safe(self.status_var.set, f"下载错误: {video_info.get('display_title', '未知标题')[:20]}...")
+    
+    def _single_video_postprocessor_hook(self, d, download_id, video_info):
+        """单个视频的后处理回调"""
+        pp_name = d.get('postprocessor')
+        status = d.get('status')
+        
+        if status == 'started' or status == 'processing':
+            self.download_status[download_id] = f"后处理 ({pp_name})"
+            self._update_gui_safe(self.status_var.set, f"处理: {video_info.get('display_title', '未知标题')[:20]}... ({pp_name})")
+        elif status == 'finished':
+            self.download_status[download_id] = f"后处理完成 ({pp_name})"
+            self._update_gui_safe(self.status_var.set, f"处理完成: {video_info.get('display_title', '未知标题')[:20]}... ({pp_name})")
+        elif status == 'error':
+            self.download_status[download_id] = f"后处理错误 ({pp_name})"
+            self._update_gui_safe(self.status_var.set, f"处理错误: {video_info.get('display_title', '未知标题')[:20]}... ({pp_name})")
+
+    # 设置并发下载数量的菜单
+    def show_download_settings_dialog(self):
+        """显示下载设置对话框"""
+        settings_dialog = tk.Toplevel(self.root)
+        settings_dialog.title("下载设置")
+        settings_dialog.geometry("380x200")
+        settings_dialog.resizable(True, True)
+        settings_dialog.configure(bg=self.bg_color)
+        settings_dialog.grab_set()
+        
+        dialog_frame = ttk.Frame(settings_dialog, padding="15")
+        dialog_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # 并发下载数量设置
+        concurrent_frame = ttk.Frame(dialog_frame)
+        concurrent_frame.pack(fill=tk.X, pady=10)
+        
+        ttk.Label(concurrent_frame, text="最大并发下载数量:").pack(side=tk.LEFT)
+        
+        concurrent_var = tk.IntVar(value=self.max_concurrent_downloads)
+        concurrent_spinbox = tk.Spinbox(concurrent_frame, from_=1, to=10, textvariable=concurrent_var, width=5)
+        concurrent_spinbox.pack(side=tk.LEFT, padx=10)
+        
+        # 断点续传选项
+        continue_var = tk.BooleanVar(value=True)
+        continue_check = ttk.Checkbutton(dialog_frame, text="启用断点续传", variable=continue_var)
+        continue_check.pack(anchor=tk.W, pady=5)
+        
+        # 重试次数设置
+        retry_frame = ttk.Frame(dialog_frame)
+        retry_frame.pack(fill=tk.X, pady=10)
+        
+        ttk.Label(retry_frame, text="下载重试次数:").pack(side=tk.LEFT)
+        
+        retry_var = tk.IntVar(value=5)
+        retry_spinbox = tk.Spinbox(retry_frame, from_=0, to=20, textvariable=retry_var, width=5)
+        retry_spinbox.pack(side=tk.LEFT, padx=10)
+        
+        # 按钮
+        button_frame = ttk.Frame(dialog_frame)
+        button_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        def apply_settings():
+            self.max_concurrent_downloads = concurrent_var.get()
+            self._add_log_message(f"已更新下载设置: 并发数={self.max_concurrent_downloads}")
+            settings_dialog.destroy()
+            
+        apply_button = ttk.Button(button_frame, text="确定", command=apply_settings)
+        apply_button.pack(side=tk.RIGHT, padx=5)
+        
+        cancel_button = ttk.Button(button_frame, text="取消", command=settings_dialog.destroy)
+        cancel_button.pack(side=tk.RIGHT, padx=5)
 
     def copy_selected_links(self):
         if pyperclip is None:
@@ -1106,6 +1629,423 @@ class BiliVideoCollector:
         except Exception as e:
             messagebox.showerror("分析错误", f"分析文件夹时出错: {e}")
             self._add_log_message(f"文件数量检查错误: {e}")
+
+    # 添加文件名模板对话框
+    def show_filename_template_dialog(self):
+        """显示文件名模板设置对话框"""
+        template_dialog = tk.Toplevel(self.root)
+        template_dialog.title("文件名模板设置")
+        template_dialog.geometry("500x400")
+        template_dialog.resizable(True, True)
+        template_dialog.configure(bg=self.bg_color)
+        template_dialog.grab_set()  # 模态对话框
+        
+        # 创建样式
+        dialog_frame = ttk.Frame(template_dialog, padding="15")
+        dialog_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # 说明
+        instruction_text = """可用的模板变量:
+{title} - 视频标题
+{bvid} - BV号
+{author} - 作者名
+{index} - 序号
+{date} - 发布日期 (如有)
+
+例如: {title}_{bvid} 或 [{author}]{title}"""
+        
+        instruction_label = ttk.Label(dialog_frame, text=instruction_text, justify=tk.LEFT)
+        instruction_label.pack(anchor=tk.W, pady=(0, 10))
+        
+        # 当前模板
+        current_template_frame = ttk.Frame(dialog_frame)
+        current_template_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(current_template_frame, text="当前模板:").pack(side=tk.LEFT)
+        current_template_var = tk.StringVar(value=self.filename_template)
+        current_template_entry = ttk.Entry(current_template_frame, textvariable=current_template_var, width=40)
+        current_template_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        
+        # 预设模板列表
+        preset_frame = ttk.Frame(dialog_frame)
+        preset_frame.pack(fill=tk.X, pady=10)
+        
+        ttk.Label(preset_frame, text="预设模板:").pack(anchor=tk.W)
+        
+        preset_templates = [
+            "{title}_{bvid}",
+            "[{author}]{title}",
+            "{bvid}_{title}",
+            "{index:03d}_{title}",
+            "{author}/{title}"
+        ]
+        
+        presets_listbox = tk.Listbox(dialog_frame, height=5)
+        presets_listbox.pack(fill=tk.X, padx=5, pady=5)
+        
+        for template in preset_templates:
+            presets_listbox.insert(tk.END, template)
+            
+        # 双击预设模板时将其设置为当前模板
+        def on_preset_select(event):
+            selection = presets_listbox.curselection()
+            if selection:
+                selected_template = presets_listbox.get(selection[0])
+                current_template_var.set(selected_template)
+                
+        presets_listbox.bind('<Double-1>', on_preset_select)
+        
+        # 预览区域
+        preview_frame = ttk.LabelFrame(dialog_frame, text="预览")
+        preview_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+        
+        preview_text = scrolledtext.ScrolledText(preview_frame, height=5, wrap=tk.WORD)
+        preview_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        preview_text.config(state=tk.DISABLED)
+        
+        # 更新预览的函数
+        def update_preview(*args):
+            template = current_template_var.set(current_template_var.get())  # 确保获取最新值
+            template = current_template_var.get()
+            preview_text.config(state=tk.NORMAL)
+            preview_text.delete(1.0, tk.END)
+            
+            # 生成几个示例预览
+            preview_samples = [
+                {"title": "【教程】如何使用Python", "bvid": "BV1xx411c7mD", "author": "编程爱好者", "index": 1},
+                {"title": "游戏实况：我的世界", "bvid": "BV2xx411c7BE", "author": "游戏UP主", "index": 2},
+                {"title": "美食分享：家常菜", "bvid": "BV3xx411c7FC", "author": "美食家", "index": 3}
+            ]
+            
+            try:
+                for sample in preview_samples:
+                    # 处理可能的格式化选项，如{index:03d}
+                    template_copy = template
+                    format_pattern = r'\{([^{}:]+):([^{}]+)\}'
+                    format_matches = re.finditer(format_pattern, template)
+                    
+                    for match in format_matches:
+                        var_name = match.group(1)
+                        format_spec = match.group(2)
+                        if var_name in sample:
+                            value = sample[var_name]
+                            if var_name == "index" and "d" in format_spec:
+                                # 处理数字格式化
+                                formatted_value = f"{value:{format_spec}}"
+                                template_copy = template_copy.replace(match.group(0), formatted_value)
+                    
+                    # 处理常规变量
+                    for key, value in sample.items():
+                        placeholder = "{" + key + "}"
+                        if placeholder in template_copy:
+                            template_copy = template_copy.replace(placeholder, str(value))
+                    
+                    # 添加到预览
+                    filename = self.sanitize_filename(template_copy)
+                    preview_text.insert(tk.END, f"{filename}.mp4\n")
+            except Exception as e:
+                preview_text.insert(tk.END, f"预览生成错误: {e}")
+                
+            preview_text.config(state=tk.DISABLED)
+            
+        # 绑定输入框变化事件
+        current_template_var.trace("w", update_preview)
+        
+        # 初始更新预览
+        update_preview()
+        
+        # 确定和取消按钮
+        button_frame = ttk.Frame(dialog_frame)
+        button_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        def apply_template():
+            self.filename_template = current_template_var.get()
+            self._add_log_message(f"已更新文件名模板: {self.filename_template}")
+            template_dialog.destroy()
+            
+        apply_button = ttk.Button(button_frame, text="确定", command=apply_template)
+        apply_button.pack(side=tk.RIGHT, padx=5)
+        
+        cancel_button = ttk.Button(button_frame, text="取消", command=template_dialog.destroy)
+        cancel_button.pack(side=tk.RIGHT, padx=5)
+
+    # 添加格式设置对话框
+    def show_format_settings_dialog(self):
+        """显示格式设置对话框"""
+        format_dialog = tk.Toplevel(self.root)
+        format_dialog.title("输出格式设置")
+        format_dialog.geometry("600x500")
+        format_dialog.resizable(True, True)
+        format_dialog.configure(bg=self.bg_color)
+        format_dialog.grab_set()  # 模态对话框
+        
+        # 创建一个笔记本控件，用于更好地组织不同格式选项
+        notebook = ttk.Notebook(format_dialog)
+        notebook.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
+        
+        # 视频设置选项卡
+        video_frame = ttk.Frame(notebook, padding="10")
+        notebook.add(video_frame, text="视频设置")
+        
+        # 音频设置选项卡
+        audio_frame = ttk.Frame(notebook, padding="10")
+        notebook.add(audio_frame, text="音频设置")
+        
+        # 高级选项选项卡
+        advanced_frame = ttk.Frame(notebook, padding="10") 
+        notebook.add(advanced_frame, text="高级选项")
+        
+        #-------------- 视频设置 --------------#
+        
+        # 视频容器格式
+        container_frame = ttk.LabelFrame(video_frame, text="视频容器格式")
+        container_frame.pack(fill=tk.X, pady=10)
+        container_frame.columnconfigure(0, weight=1)
+        container_frame.columnconfigure(1, weight=1)
+        
+        video_format_var = tk.StringVar(value=self.video_format)
+        
+        formats = [
+            ("MP4 (常用，兼容性好)", "mp4"),
+            ("MKV (支持更多编码)", "mkv"), 
+            ("WebM (开源格式)", "webm"),
+            ("FLV (Flash视频格式)", "flv"),
+            ("AVI (传统格式)", "avi"),
+            ("MOV (苹果QuickTime)", "mov")
+        ]
+        
+        row = 0
+        col = 0
+        for text, value in formats:
+            ttk.Radiobutton(container_frame, text=text, value=value, variable=video_format_var).grid(
+                row=row, column=col, sticky="w", padx=5, pady=3)
+            col += 1
+            if col > 1:
+                col = 0
+                row += 1
+        
+        # 视频编码选项
+        codec_frame = ttk.LabelFrame(video_frame, text="视频编码")
+        codec_frame.pack(fill=tk.X, pady=10)
+        codec_frame.columnconfigure(0, weight=1)
+        codec_frame.columnconfigure(1, weight=1)
+        
+        video_codec_var = tk.StringVar(value="auto")
+        
+        codecs = [
+            ("自动选择", "auto"),
+            ("H.264 (常用)", "h264"),
+            ("H.265/HEVC (高效率)", "hevc"), 
+            ("AV1 (新一代开源)", "av1"),
+            ("VP9 (Google开源)", "vp9"),
+            ("MPEG-4 (传统)", "mpeg4")
+        ]
+        
+        row = 0
+        col = 0
+        for text, value in codecs:
+            ttk.Radiobutton(codec_frame, text=text, value=value, variable=video_codec_var).grid(
+                row=row, column=col, sticky="w", padx=5, pady=3)
+            col += 1
+            if col > 1:
+                col = 0
+                row += 1
+        
+        # 视频质量
+        quality_frame = ttk.LabelFrame(video_frame, text="视频质量")
+        quality_frame.pack(fill=tk.X, pady=10)
+        quality_frame.columnconfigure(0, weight=1)
+        quality_frame.columnconfigure(1, weight=1)
+        
+        quality_var = tk.StringVar(value=self.video_quality)
+        
+        qualities = [
+            ("最佳质量 (原始清晰度)", "best"),
+            ("1080P", "1080"),
+            ("720P", "720"),
+            ("480P", "480"),
+            ("360P", "360"),
+            ("240P (低质量)", "240")
+        ]
+        
+        row = 0
+        col = 0
+        for text, value in qualities:
+            ttk.Radiobutton(quality_frame, text=text, value=value, variable=quality_var).grid(
+                row=row, column=col, sticky="w", padx=5, pady=3)
+            col += 1
+            if col > 1:
+                col = 0
+                row += 1
+        
+        #-------------- 音频设置 --------------#
+        
+        # 音频格式
+        audio_format_frame = ttk.LabelFrame(audio_frame, text="音频格式")
+        audio_format_frame.pack(fill=tk.X, pady=10)
+        audio_format_frame.columnconfigure(0, weight=1)
+        audio_format_frame.columnconfigure(1, weight=1)
+        
+        audio_format_var = tk.StringVar(value=self.audio_format)
+        
+        audio_formats = [
+            ("M4A (AAC编码)", "m4a"),
+            ("MP3 (常用有损格式)", "mp3"),
+            ("FLAC (无损格式)", "flac"),
+            ("WAV (无压缩)", "wav"),
+            ("OPUS (高效率)", "opus"),
+            ("OGG (开源格式)", "ogg")
+        ]
+        
+        row = 0
+        col = 0
+        for text, value in audio_formats:
+            ttk.Radiobutton(audio_format_frame, text=text, value=value, variable=audio_format_var).grid(
+                row=row, column=col, sticky="w", padx=5, pady=3)
+            col += 1
+            if col > 1:
+                col = 0
+                row += 1
+        
+        # 音频质量
+        audio_quality_frame = ttk.LabelFrame(audio_frame, text="音频质量")
+        audio_quality_frame.pack(fill=tk.X, pady=10)
+        
+        audio_quality_var = tk.StringVar(value="best")
+        
+        ttk.Radiobutton(audio_quality_frame, text="最高质量", value="best", variable=audio_quality_var).pack(anchor=tk.W)
+        ttk.Radiobutton(audio_quality_frame, text="中等质量 (128kbps)", value="128", variable=audio_quality_var).pack(anchor=tk.W)
+        ttk.Radiobutton(audio_quality_frame, text="低质量 (96kbps)", value="96", variable=audio_quality_var).pack(anchor=tk.W)
+        
+        # 音频声道
+        audio_channel_frame = ttk.LabelFrame(audio_frame, text="音频声道")
+        audio_channel_frame.pack(fill=tk.X, pady=10)
+        
+        audio_channel_var = tk.StringVar(value="stereo")
+        
+        ttk.Radiobutton(audio_channel_frame, text="立体声 (Stereo)", value="stereo", variable=audio_channel_var).pack(anchor=tk.W)
+        ttk.Radiobutton(audio_channel_frame, text="单声道 (Mono)", value="mono", variable=audio_channel_var).pack(anchor=tk.W)
+        
+        #-------------- 高级选项 --------------#
+        
+        # 字幕设置
+        subtitle_frame = ttk.LabelFrame(advanced_frame, text="字幕设置")
+        subtitle_frame.pack(fill=tk.X, pady=10)
+        
+        embed_subtitle_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(subtitle_frame, text="嵌入字幕 (如果可用)", variable=embed_subtitle_var).pack(anchor=tk.W)
+        
+        download_danmaku_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(subtitle_frame, text="下载弹幕", variable=download_danmaku_var).pack(anchor=tk.W)
+        
+        # 高级下载选项
+        download_frame = ttk.LabelFrame(advanced_frame, text="下载选项")
+        download_frame.pack(fill=tk.X, pady=10)
+        
+        prefer_dash_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(download_frame, text="优先使用DASH流 (通常更高质量)", variable=prefer_dash_var).pack(anchor=tk.W)
+        
+        # 高级后处理选项
+        postprocessing_frame = ttk.LabelFrame(advanced_frame, text="后处理选项")
+        postprocessing_frame.pack(fill=tk.X, pady=10)
+        
+        embed_thumbnail_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(postprocessing_frame, text="嵌入视频缩略图", variable=embed_thumbnail_var).pack(anchor=tk.W)
+        
+        embed_metadata_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(postprocessing_frame, text="嵌入元数据 (标题、作者等)", variable=embed_metadata_var).pack(anchor=tk.W)
+        
+        # 使用命令行参数
+        params_frame = ttk.LabelFrame(advanced_frame, text="自定义参数 (高级用户)")
+        params_frame.pack(fill=tk.X, pady=10)
+        
+        ttk.Label(params_frame, text="自定义yt-dlp参数:").pack(anchor=tk.W)
+        
+        custom_params_var = tk.StringVar()
+        custom_params_entry = ttk.Entry(params_frame, textvariable=custom_params_var, width=40)
+        custom_params_entry.pack(fill=tk.X, padx=5, pady=5)
+        
+        ttk.Label(params_frame, text="示例: --no-mtime --no-overwrites").pack(anchor=tk.W)
+        
+        # 确定和取消按钮
+        button_frame = ttk.Frame(format_dialog)
+        button_frame.pack(fill=tk.X, pady=(10, 0), padx=15)
+        
+        def apply_settings():
+            self.video_format = video_format_var.get()
+            self.audio_format = audio_format_var.get()
+            self.video_quality = quality_var.get()
+            self.video_codec = video_codec_var.get()
+            self.audio_quality = audio_quality_var.get()
+            self.audio_channel = audio_channel_var.get()
+            self.embed_subtitle = embed_subtitle_var.get()
+            self.download_danmaku = download_danmaku_var.get()
+            self.prefer_dash = prefer_dash_var.get()
+            self.embed_thumbnail = embed_thumbnail_var.get()
+            self.embed_metadata = embed_metadata_var.get()
+            self.custom_params = custom_params_var.get()
+            
+            self._add_log_message(f"已更新输出格式设置: 视频格式={self.video_format}, 质量={self.video_quality}")
+            format_dialog.destroy()
+            
+        apply_button = ttk.Button(button_frame, text="确定", command=apply_settings)
+        apply_button.pack(side=tk.RIGHT, padx=5)
+        
+        cancel_button = ttk.Button(button_frame, text="取消", command=format_dialog.destroy)
+        cancel_button.pack(side=tk.RIGHT, padx=5)
+
+    # 添加模板变量替换函数
+    def apply_filename_template(self, template, video_info, index=0):
+        """根据模板和视频信息生成文件名"""
+        result = template
+        
+        # 替换基本变量
+        replacements = {
+            "{title}": video_info.get('metadata_title_raw', '未知标题'),
+            "{bvid}": video_info.get('bvid', ''),
+            "{author}": video_info.get('author', '未知作者'),
+            "{index}": str(index + 1),
+            # 日期暂时没有，未来可以添加
+        }
+        
+        # 处理高级格式化，如{index:03d}
+        format_pattern = r'\{([^{}:]+):([^{}]+)\}'
+        format_matches = re.finditer(format_pattern, result)
+        
+        for match in format_matches:
+            var_name = match.group(1)
+            format_spec = match.group(2)
+            
+            if var_name == "index":
+                try:
+                    # 处理数字格式化
+                    formatted_value = f"{index + 1:{format_spec}}"
+                    result = result.replace(match.group(0), formatted_value)
+                except ValueError:
+                    # 格式化失败，直接使用索引
+                    result = result.replace(match.group(0), str(index + 1))
+        
+        # 替换基本变量
+        for placeholder, value in replacements.items():
+            if placeholder in result:
+                result = result.replace(placeholder, str(value))
+        
+        # 替换目录分隔符为系统合适的分隔符
+        if os.sep == '\\':  # Windows系统
+            result = result.replace('/', '\\')
+        
+        # 创建必要的子目录
+        if os.sep in result:
+            directory = os.path.join(self.download_folder, os.path.dirname(result))
+            try:
+                if not os.path.exists(directory):
+                    os.makedirs(directory)
+            except Exception as e:
+                self._add_log_message(f"创建目录失败: {directory}, 错误: {e}")
+                # 失败则移除目录部分
+                result = os.path.basename(result)
+        
+        return self.sanitize_filename(result)
 
 if __name__ == '__main__':
     root = tk.Tk()
